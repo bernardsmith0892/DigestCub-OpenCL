@@ -201,21 +201,30 @@ uint4 generate_md5_digest(uchar *msg, const uint length) {
 // Generates an MD5 digest for each 128-byte message
 __kernel void generate_md5_digests(__global const uchar *messages, __global const uint *lengths, __global uint *results) {
     size_t gid = get_global_id(0);
-    
-    // Compute the MD5 digest for this password
-    uchar msg[128] = {0};
-    for (size_t i = 0; i < 128; ++i){
-        msg[i] = messages[gid*128 + i];
-    }
-    uint4 digest = generate_md5_digest(msg, lengths[gid]);
-    // printf("%d: (len %d) %c%c%c ... %c%c%c\n", gid, lengths[gid], msg[0], msg[1], msg[2], msg[lengths[gid]-3], msg[lengths[gid]-2], msg[lengths[gid]-1]);
-    // printf("%d: %04x, %04x, %04x, %04x\n", gid, digest.s0, digest.s1, digest.s2, digest.s3);
 
+    // Determine base index and length of the assigned message
+    uint length;
+    uint msg_start;
+    if (gid > 0)
+        msg_start = lengths[gid - 1];
+    else
+        msg_start = 0;
+    length = lengths[gid] - msg_start;
+
+    // Extract the assigned message from the input buffer
+    uchar msg[128] = {0};
+    for (size_t i = 0; i < length; ++i){
+        msg[i] = messages[msg_start + i];
+    }
+
+    // Compute the MD5 digest for this password
+    uint4 result_digest = generate_md5_digest(msg, length);
+    
     // Store the results
-    results[gid * 4]     = digest.s0;
-    results[gid * 4 + 1] = digest.s1;
-    results[gid * 4 + 2] = digest.s2;
-    results[gid * 4 + 3] = digest.s3;
+    results[gid * 4]     = result_digest.s0;
+    results[gid * 4 + 1] = result_digest.s1;
+    results[gid * 4 + 2] = result_digest.s2;
+    results[gid * 4 + 3] = result_digest.s3;
 }
 
 // Determines if ANY of the given messages matches the given target_digest
@@ -236,19 +245,11 @@ __kernel void bruteforce_md5_digests(
         msg_start = 0;
     length = lengths[gid] - msg_start;
 
-    // if (gid == 3) {
-    //     printf("%d: %d - %d\n", gid, msg_start, length);
-    // }
-    
     // Extract the assigned message from the input buffer
     uchar msg[128] = {0};
     for (size_t i = 0; i < length; ++i){
         msg[i] = messages[msg_start + i];
     }
-
-    // if (gid == 3) {
-    //     printf("%d: %c%c ... %c%c\n", gid, msg[0], msg[1], msg[length-2], msg[length-1]);
-    // }
 
     // Compute the MD5 digest for this password
     uint4 result_digest = generate_md5_digest(msg, length);

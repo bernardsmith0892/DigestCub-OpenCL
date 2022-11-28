@@ -235,9 +235,13 @@ def generate_digests_with_gpu(messages: List[bytes], *, platform_id: int=0, devi
     kernel = program.generate_md5_digests
 
     # Prepare input and output memory buffers
-    messages_host, lengths_host = prepare_message_length_buffers(messages) 
+    message_buffer = b''.join(messages)
+    messages_host = np.frombuffer(message_buffer, dtype=np.ubyte)
     messages_dev = cl.array.to_device(queue, messages_host)
+
+    lengths_host = generate_length_buffer(messages) 
     lengths_dev = cl.array.to_device(queue, lengths_host)
+
     results_dev = cl.array.zeros(queue, len(messages) * 4, dtype=np.uint32)
 
     # Execute the kernel
@@ -269,21 +273,26 @@ def bruteforce_digests_with_gpu(wordlist: List[bytes], target_digest: bytes, *, 
         Optional[np.uint32]: The index of the matching message. If no match found, then None.
     """    
     
+    # Setup OpenCL platform and context
     platforms = cl.get_platforms()
     ctx = cl.Context(
             dev_type=cl.device_type.GPU,
             properties=[(cl.context_properties.PLATFORM, platforms[platform_id])])
 
+    # Create command queue and compile kernel
     queue = cl.CommandQueue(ctx)
     program = cl.Program(ctx, open('src/md5.cl').read()).build()
     kernel = program.bruteforce_md5_digests
 
+    # Convert the target digest to an OpenCL vector
     target_host = np.frombuffer(int(target_digest, 16).to_bytes(16, byteorder='big'), dtype=np.uint32)
     target_vec = cl.cltypes.make_uint4(target_host[0], target_host[1], target_host[2], target_host[3])
 
+    # Loop through wordlist in chunks until we match within a chunk
     for i in range(0, len(wordlist), chunk_size):
         current_chunk = wordlist[i:i + chunk_size]
         
+        # Prepare input buffers
         message_buffer = b''.join(current_chunk)
         messages_host = np.frombuffer(message_buffer, dtype=np.ubyte)
         messages_dev = cl.array.to_device(queue, messages_host)
@@ -291,11 +300,15 @@ def bruteforce_digests_with_gpu(wordlist: List[bytes], target_digest: bytes, *, 
         lengths_host = generate_length_buffer(current_chunk) 
         lengths_dev = cl.array.to_device(queue, lengths_host)
         
+        # Prepare result buffer (length of 1)
         results_dev = cl.array.zeros(queue, (1,), dtype=np.uint32)
 
+
+        # Execute the kernel
         event = kernel(queue, (len(lengths_host),), None, messages_dev.data, lengths_dev.data, target_vec, results_dev.data)
         queue.finish()
 
+        # Retrieve the results and test if we found a match
         results = results_dev.get()
         if results[0] != 0:
             return results[0] - 1 + i
