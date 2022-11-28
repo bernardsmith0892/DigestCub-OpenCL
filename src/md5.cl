@@ -223,16 +223,35 @@ __kernel void bruteforce_md5_digests(
     __global const uchar *messages, 
     __global const uint  *lengths,
              const uint4 target_digest,
-    __global       uint *global_result) // Output array of length 1
+    __global       uint  *global_result ) // Output array of length 1
 {
     size_t gid = get_global_id(0);
     
-    // Compute the MD5 digest for this password
+    // Determine base index and length of the assigned message
+    uint length;
+    uint msg_start;
+    if (gid > 0)
+        msg_start = lengths[gid - 1];
+    else
+        msg_start = 0;
+    length = lengths[gid] - msg_start;
+
+    // if (gid == 3) {
+    //     printf("%d: %d - %d\n", gid, msg_start, length);
+    // }
+    
+    // Extract the assigned message from the input buffer
     uchar msg[128] = {0};
-    for (size_t i = 0; i < 128; ++i){
-        msg[i] = messages[gid*128 + i];
+    for (size_t i = 0; i < length; ++i){
+        msg[i] = messages[msg_start + i];
     }
-    uint4 result_digest = generate_md5_digest(msg, lengths[gid]);
+
+    // if (gid == 3) {
+    //     printf("%d: %c%c ... %c%c\n", gid, msg[0], msg[1], msg[length-2], msg[length-1]);
+    // }
+
+    // Compute the MD5 digest for this password
+    uint4 result_digest = generate_md5_digest(msg, length);
 
     // If our MD5 digest matches the target digest, set the result to our GID + 1.
     //   - The +1 ensures that work-item 0 is also able to report success

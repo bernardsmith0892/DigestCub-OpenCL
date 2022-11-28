@@ -50,14 +50,13 @@ def test_opencl_md5_successfully_bruteforces():
         ("johnny23", "1481a386d88c126fc099c574e58eced9"),
     ]
 
+    wordlist = open('rockyou.txt', 'rb').readlines()
+    # Strip newline chars from each test input and generate an MD5 digest for each
+    test_passwords = [word.strip() for word in wordlist]
+
     for test in test_cases:
-        step_size = 2**16
-        wordlist = open('rockyou.txt', 'rb').readlines()
-        for i in range(0, len(wordlist), step_size):
-            # Strip newline chars from each test input and generate an MD5 digest for each
-            test_passwords = [word.strip() for word in wordlist[i: i+step_size]]
-            result = md5.bruteforce_digests_with_gpu(test_passwords, test[1], workgroup_size=1024)
-            if result is not None:
-                found_password = test_passwords[result].decode('utf-8')
-                break
+        result = md5.bruteforce_digests_with_gpu(test_passwords, test[1])
+        if result is not None:
+            found_password = test_passwords[result].decode('utf-8')
+            break
         assert found_password == test[0], f"Discovered password does not match test case!\nFound: {found_password}\nTest Case:  {test[0]}"

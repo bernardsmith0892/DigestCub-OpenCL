@@ -183,6 +183,33 @@ def prepare_message_length_buffers(messages: List[bytes]) -> Tuple[NDArray[np.ub
     lengths_buffer = np.array(lengths, dtype=np.uint32)
     return message_buffer, lengths_buffer
 
+'''
+Performance comparison - 
+In [16]: %%timeit
+    ...: md5.generate_length_buffer(c)
+    ...:
+    ...:
+6.78 ms ± 131 µs per loop (mean ± std. dev. of 7 runs, 100 loops each)
+
+In [17]: %%timeit
+    ...: md5.prepare_message_length_buffers(c)
+    ...:
+    ...:
+36.5 ms ± 570 µs per loop (mean ± std. dev. of 7 runs, 10 loops each)
+'''
+def generate_length_buffer(messages: List[bytes]) -> NDArray[np.uint32]:
+    """Generates a length offset buffer for the bruteforce kernel. Allows for use of message buffer with different message lengths.
+
+    Returns:
+        NDarray[np.uint32]: Length offset buffer in the format - stop_index = [message_id], start_index = [message_id - 1]
+    """    
+    lengths = []
+    total_length = 0
+    for msg in messages:
+        total_length += len(msg)
+        lengths.append(total_length)
+    return np.array(lengths, dtype=np.uint32)
+
 def generate_digests_with_gpu(messages: List[bytes], *, platform_id: int=0, device_id: int=0) -> List[bytes]:
     """Generate an MD5 digest for each provided message.
 
@@ -229,70 +256,64 @@ def generate_digests_with_gpu(messages: List[bytes], *, platform_id: int=0, devi
         )
     return digests
 
-def bruteforce_digests_with_gpu(test_messages: List[bytes], target_digest: bytes, *, workgroup_size: int=None, platform_id: int=0, device_id: int=0) -> Optional[np.uint32]:
+def bruteforce_digests_with_gpu(wordlist: List[bytes], target_digest: bytes, *, chunk_size: int=2**16, platform_id: int=0) -> Optional[np.uint32]:
     """Check if any of the given messages matches the target digest.
 
     Args:
-        test_messages (List[bytes]): Messages to test for a match.
+        wordlist (List[bytes]): Messages to test for a match.
         target_digest (bytes): The digest a message needs to successfully match on.
-        workgroup_size (int, optional): OpenCL workgroup size. Defaults to half of the device's max workgroup size.
+        chunk_size (int, optional): Size of each processing chunk. Defaults to 65_536.
         platform_id (int, optional): ID of the desired OpenCL platform to use. Defaults to 0.
-        device_id (int, optional): ID of the desired OpenCL device to use. Defaults to 0.
 
     Returns:
         Optional[np.uint32]: The index of the matching message. If no match found, then None.
     """    
     
-    # TODO: Refactor so the context and kernel is only created once
     platforms = cl.get_platforms()
-    device = platforms[platform_id].get_devices()[device_id]
     ctx = cl.Context(
             dev_type=cl.device_type.GPU,
             properties=[(cl.context_properties.PLATFORM, platforms[platform_id])])
 
-    queue = cl.CommandQueue(ctx, properties=cl.command_queue_properties.PROFILING_ENABLE)
+    queue = cl.CommandQueue(ctx)
     program = cl.Program(ctx, open('src/md5.cl').read()).build()
     kernel = program.bruteforce_md5_digests
 
-    if workgroup_size is None:
-        workgroup_size = device.max_work_group_size // 2
-    elif workgroup_size > device.max_work_group_size:
-        raise(MemoryError(f"The workgroup size ({workgroup_size}) is larger than the device's maximum size! ({device.max_work_group_size})"))
-    assert len(test_messages) % workgroup_size == 0
-
-    # TODO: Refactor so this padding function is more efficient
-    messages_host, lengths_host = prepare_message_length_buffers(test_messages) 
-    messages_dev = cl.array.to_device(queue, messages_host)
-    lengths_dev = cl.array.to_device(queue, lengths_host)
-    results_dev = cl.array.zeros(queue, (1,), dtype=np.uint32)
-    
     target_host = np.frombuffer(int(target_digest, 16).to_bytes(16, byteorder='big'), dtype=np.uint32)
     target_vec = cl.cltypes.make_uint4(target_host[0], target_host[1], target_host[2], target_host[3])
 
-    event = kernel(queue, (len(test_messages),), (workgroup_size,), messages_dev.data, lengths_dev.data, target_vec, results_dev.data)
-    queue.finish()
+    for i in range(0, len(wordlist), chunk_size):
+        current_chunk = wordlist[i:i + chunk_size]
+        
+        message_buffer = b''.join(current_chunk)
+        messages_host = np.frombuffer(message_buffer, dtype=np.ubyte)
+        messages_dev = cl.array.to_device(queue, messages_host)
 
-    results = results_dev.get()
-    if results[0] != 0:
-        return results[0] - 1
-    else:
-        return None 
+        lengths_host = generate_length_buffer(current_chunk) 
+        lengths_dev = cl.array.to_device(queue, lengths_host)
+        
+        results_dev = cl.array.zeros(queue, (1,), dtype=np.uint32)
+
+        event = kernel(queue, (len(lengths_host),), None, messages_dev.data, lengths_dev.data, target_vec, results_dev.data)
+        queue.finish()
+
+        results = results_dev.get()
+        if results[0] != 0:
+            return results[0] - 1 + i
+    
+    return None 
 
 def main():
     # hash_to_break = '5f4dcc3b5aa765d61d8327deb882cf99' # password
     hash_to_break = '9a69ad706500bcd5c649bc5a51ea30a8' # buddykey
     # hash_to_break = 'e10adc3949ba59abbe56e057f20f883e' # 123456
     
-    step_size = 2**16
     wordlist = open('rockyou.txt', 'rb').readlines()
-    for i in range(0, len(wordlist), step_size):
-        # Strip newline chars from each test input and generate an MD5 digest for each
-        test_passwords = [word.strip() for word in wordlist[i: i+step_size]]
-        result = bruteforce_digests_with_gpu(test_passwords, hash_to_break, workgroup_size=1024)
-        if result is not None:
-            password = test_passwords[result].decode('utf-8')
-            print(f"Password found!\n{password}")
-            return
+    # Strip newline chars from each test input and generate an MD5 digest for each
+    test_passwords = [word.strip() for word in wordlist]
+    result = bruteforce_digests_with_gpu(test_passwords, hash_to_break)
+    if result is not None:
+        password = test_passwords[result].decode('utf-8')
+        print(f"Password found!\n{password}")
             
         # result = generate_digests_with_gpu(test_passwords, hash_to_break, workgroup_size=256)
         # # Test if any of the resulting digests match the target
