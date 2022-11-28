@@ -1,0 +1,5 @@
+md5.py.lprof
+.vscode/*
+.pytest_cache/*
+src/__pycache__/*
+rockyou.txt
