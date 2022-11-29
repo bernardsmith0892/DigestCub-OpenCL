@@ -1,11 +1,13 @@
 import math
-from typing import List, Optional, Tuple
-from numpy.typing import NDArray
+import argparse
+import re
+import sys
 from fixedint.aliases import MutableUInt32 as u32
-
 import pyopencl as cl
 import pyopencl.array
 import numpy as np
+from typing import List, Optional, Tuple
+from numpy.typing import NDArray
 
 def generate_md5_digest(msg: bytes) -> bytes:
     """Python implementation of the MD5 hashing function in accordance with RFC 1321.
@@ -316,25 +318,49 @@ def bruteforce_digests_with_gpu(wordlist: List[bytes], target_digest: bytes, *, 
     return None 
 
 def main():
-    # hash_to_break = '5f4dcc3b5aa765d61d8327deb882cf99' # password
-    hash_to_break = '9a69ad706500bcd5c649bc5a51ea30a8' # buddykey
-    # hash_to_break = 'e10adc3949ba59abbe56e057f20f883e' # 123456
+    # Setup argument parser
+    parser = argparse.ArgumentParser(
+        description="""
+  _____  _                 _    _____      _     
+ |  __ \(_)               | |  / ____|    | |    
+ | |  | |_  __ _  ___  ___| |_| |    _   _| |__  
+ | |  | | |/ _` |/ _ \/ __| __| |   | | | | '_ \ 
+ | |__| | | (_| |  __/\__ \ |_| |___| |_| | |_) |
+ |_____/|_|\__, |\___||___/\__|\_____\__,_|_.__/ 
+            __/ |                                
+           |___/                                 
+
+GPU-bruteforce an MD5 password using a wordlist.
+        """,
+        epilog=f"""
+Example usage:
+python {sys.argv[0]} 5f4dcc3b5aa765d61d8327deb882cf99 rockyou.txt
+Match found - password
+
+python {sys.argv[0]} 9a69ad706500bcd5c649bc5a51ea30a8 rockyou.txt
+Match found - buddykey
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument('digest', type=str, help='hash to bruteforce (provided as a 32-character hexadecimal string)')
+    parser.add_argument('wordlist', type=str, help='wordlist file to use')
+    parser.add_argument('-s', '--chunk_size', type=int, default=65_536, help='number of words to test at a time (defaults to 65_536)')
+    args = parser.parse_args()
     
-    wordlist = open('rockyou.txt', 'rb').readlines()
-    # Strip newline chars from each test input and generate an MD5 digest for each
-    test_passwords = [word.strip() for word in wordlist]
-    result = bruteforce_digests_with_gpu(test_passwords, hash_to_break)
-    if result is not None:
-        password = test_passwords[result].decode('utf-8')
-        print(f"Password found!\n{password}")
-            
-        # result = generate_digests_with_gpu(test_passwords, hash_to_break, workgroup_size=256)
-        # # Test if any of the resulting digests match the target
-        # for i, digest in enumerate(digests):
-        #     if digest.hex() == hash_to_break:
-        #         password = test_passwords[i].decode('utf-8')
-        #         print(f"Password found!\n{password}:{digest.hex()}")
-        #         return
+    # Validate the provided MD5 hash
+    assert re.match('^[0-9a-fA-F]{32}$', args.digest), 'Invalid MD5 digest!'
+    
+    with open(args.wordlist, 'rb') as wordlist:
+        # Strip newline chars from each word in the wordlist
+        test_passwords = [word.strip() for word in wordlist.readlines()]
+        
+        # Conduct bruteforce search
+        result = bruteforce_digests_with_gpu(test_passwords, args.digest)
+        if result is not None:
+            password = test_passwords[result].decode('utf-8')
+            print(f"Match found - {password}")
+        else:
+            print(f"No match found...")
 
 if __name__ == '__main__':
     main()
