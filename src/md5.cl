@@ -257,10 +257,7 @@ __kernel void bruteforce_md5_digests(
     // If our MD5 digest matches the target digest, set the result to our GID + 1.
     //   - The +1 ensures that work-item 0 is also able to report success
     //   - Assumes only ONE password in this set will be correct.
-    if (   result_digest.s0 == target_digest.s0 
-        && result_digest.s1 == target_digest.s1
-        && result_digest.s2 == target_digest.s2
-        && result_digest.s3 == target_digest.s3) {
+    if ( all(result_digest == target_digest) ) {
         global_result[0] = gid + 1;
         // printf("%d: %c%c ... %c%c\n", gid, msg[0], msg[1], msg[lengths[gid]-2], msg[lengths[gid]-1]);
         // printf("Result: %04x, %04x, %04x, %04x - Target: %04x, %04x, %04x, %04x\n",
